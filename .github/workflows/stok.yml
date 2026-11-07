@@ -54,6 +54,13 @@ jobs:
         if: ${{ inputs.dump }}
         run: python togg_stok_bot.py --dump -v
 
+      - name: Dump özeti (log)
+        if: ${{ inputs.dump }}
+        run: |
+          echo "=== endpoints.txt ==="; cat dump/endpoints.txt || true
+          echo; echo "=== page.txt ==="; head -c 30000 dump/page.txt || true
+          echo; for f in dump/json_*.json; do echo; echo "=== $f ==="; head -c 6000 "$f"; done
+
       - name: Dump'ı artifact olarak yükle
         if: ${{ inputs.dump }}
         uses: actions/upload-artifact@v4
