@@ -19,6 +19,10 @@ on:
         description: "Sadece tek kontrol yap, ham veriyi loga ve artifact'e yaz"
         type: boolean
         default: false
+      test_telegram:
+        description: "Sadece Telegram'a test mesajı gönder"
+        type: boolean
+        default: false
 
 concurrency:
   group: togg-stok
@@ -54,6 +58,10 @@ jobs:
           key: togg-state-${{ github.run_id }}
           restore-keys: togg-state-
 
+      - name: Telegram testi
+        if: ${{ inputs.test_telegram }}
+        run: python togg_stok_bot.py --test-telegram
+
       - name: Dump
         if: ${{ inputs.dump }}
         run: python togg_stok_bot.py --dump -v
@@ -74,7 +82,7 @@ jobs:
           path: dump/
 
       - name: Kontrol döngüsü (~55 dk, 4 dk aralık)
-        if: ${{ !inputs.dump }}
+        if: ${{ !inputs.dump && !inputs.test_telegram }}
         run: python togg_stok_bot.py --interval 240 --max-runtime 3300
 
       - name: Durumu kaydet (state.json)
