@@ -225,3 +225,28 @@ def test_v2_long_range_without_rwd_in_name_still_matches():
 def test_products_payload_without_products_key_is_empty():
     assert find_target_products({"error": "x"}) == []
     assert find_target_products(None) == []
+
+
+# ---------------------------------------------------------------------------
+# Teşhis: getUpdates yanıtından bota yazan sohbetleri çıkar
+# ---------------------------------------------------------------------------
+
+
+def test_chats_from_updates_lists_each_chat_once():
+    from togg_stok_bot import chats_from_updates
+
+    updates = {
+        "ok": True,
+        "result": [
+            {"update_id": 1, "message": {"chat": {"id": 42, "first_name": "Mert", "type": "private"}}},
+            {"update_id": 2, "message": {"chat": {"id": 42, "first_name": "Mert", "type": "private"}}},
+            {"update_id": 3, "my_chat_member": {"chat": {"id": -100, "title": "Grup", "type": "group"}}},
+        ],
+    }
+    assert chats_from_updates(updates) == [(42, "Mert"), (-100, "Grup")]
+
+
+def test_chats_from_updates_handles_empty():
+    from togg_stok_bot import chats_from_updates
+
+    assert chats_from_updates({"ok": True, "result": []}) == []

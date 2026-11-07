@@ -337,6 +337,49 @@ def send_telegram(text: str) -> None:
         raise RuntimeError(f"Telegram HTTP {r.status_code}: {desc}")
 
 
+def chats_from_updates(updates: Any) -> list[tuple[int, str]]:
+    """getUpdates yanıtındaki sohbetleri (id, ad) olarak, tekrarsız döndürür."""
+    out: list[tuple[int, str]] = []
+    seen: set[int] = set()
+    for upd in (updates or {}).get("result", []) or []:
+        for key in ("message", "edited_message", "my_chat_member", "channel_post"):
+            chat = (upd.get(key) or {}).get("chat")
+            if isinstance(chat, dict) and chat.get("id") not in seen:
+                seen.add(chat["id"])
+                name = chat.get("title") or chat.get("first_name") or chat.get("username") or ""
+                out.append((chat["id"], name))
+    return out
+
+
+def telegram_diagnose() -> int:
+    """Bota yazan sohbetleri listeler; TELEGRAM_CHAT_ID ile karşılaştırır."""
+    import requests
+
+    token = os.environ.get("TELEGRAM_BOT_TOKEN")
+    chat_id = os.environ.get("TELEGRAM_CHAT_ID", "")
+    if not token:
+        log.error("TELEGRAM_BOT_TOKEN tanımlı değil")
+        return 1
+    me = requests.get(f"https://api.telegram.org/bot{token}/getMe", timeout=20).json()
+    if not me.get("ok"):
+        log.error("Token geçersiz: %s", me.get("description"))
+        return 1
+    log.info("Bot: @%s", me["result"].get("username"))
+    upd = requests.get(f"https://api.telegram.org/bot{token}/getUpdates", timeout=20).json()
+    chats = chats_from_updates(upd)
+    if not chats:
+        log.error("Bota henüz kimse yazmamış. Telegram'da @%s sohbetini açıp BAŞLAT'a bas.",
+                  me["result"].get("username"))
+        return 1
+    for cid, name in chats:
+        mark = "  <-- TELEGRAM_CHAT_ID ile eşleşiyor" if str(cid) == chat_id.strip() else ""
+        log.info("Bota yazan sohbet: id=%s ad=%s%s", cid, name, mark)
+    if not any(str(cid) == chat_id.strip() for cid, _ in chats):
+        log.error("TELEGRAM_CHAT_ID (%r) yukarıdaki sohbetlerden hiçbiriyle eşleşmiyor.", chat_id)
+        return 1
+    return 0
+
+
 def html_escape(s: str) -> str:
     return s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 
@@ -536,6 +579,7 @@ def main(argv: list[str] | None = None) -> int:
             send_telegram("✅ Togg stok botu bağlantı testi başarılı.")
         except Exception as exc:  # noqa: BLE001
             log.error("Telegram testi başarısız: %s", exc)
+            telegram_diagnose()
             return 1
         log.info("Test mesajı gönderildi")
         return 0
