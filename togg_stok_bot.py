@@ -297,7 +297,7 @@ def fetch_page(url: str, timeout_ms: int = 60_000, dump_dir: Path | None = None)
             viewport={"width": 1366, "height": 900},
         )
         page = ctx.new_page()
-        page.on("response", responses.append)
+        page.on("response", lambda resp: responses.append(resp))
         page.goto(url, wait_until="domcontentloaded", timeout=timeout_ms)
         try:
             page.wait_for_load_state("networkidle", timeout=timeout_ms)
@@ -388,6 +388,8 @@ def run(
             state["consecutive_errors"] = 0
             state["error_notified"] = False
         except Exception as exc:  # noqa: BLE001
+            if dump_dir:
+                raise  # dump modunda hatayı gizleme, çalıştırma başarısız olsun
             state["consecutive_errors"] = state.get("consecutive_errors", 0) + 1
             log.exception("Kontrol hatası (%d. ardışık)", state["consecutive_errors"])
             if (
