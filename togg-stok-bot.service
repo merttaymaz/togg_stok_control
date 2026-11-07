@@ -1,0 +1,23 @@
+# Linux sunucuda sürekli çalıştırmak için (systemd):
+#   sudo cp togg-stok-bot.service /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now togg-stok-bot
+#   journalctl -u togg-stok-bot -f
+#
+# WorkingDirectory ve User satırlarını kendi yoluna/kullanıcına göre düzelt.
+
+[Unit]
+Description=Togg T10F V2 RWD Uzun Menzil stok takip botu
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=mert
+WorkingDirectory=/home/mert/togg-stok-bot
+ExecStart=/home/mert/togg-stok-bot/.venv/bin/python togg_stok_bot.py
+Restart=always
+RestartSec=30
+
+[Install]
+WantedBy=multi-user.target
