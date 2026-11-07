@@ -329,7 +329,12 @@ def send_telegram(text: str) -> None:
         },
         timeout=20,
     )
-    r.raise_for_status()
+    if not r.ok:
+        try:
+            desc = r.json().get("description", "")
+        except ValueError:
+            desc = r.text[:200]
+        raise RuntimeError(f"Telegram HTTP {r.status_code}: {desc}")
 
 
 def html_escape(s: str) -> str:
