@@ -28,6 +28,11 @@ from pathlib import Path
 from typing import Any
 
 DEFAULT_URL = "https://configurator.togg.com.tr/t10f"
+# Konfigüratörün ürün listesini çektiği uç nokta (Playwright dump'ından tespit edildi)
+DEFAULT_API_URL = (
+    "https://bff.dfs.togg.cloud/smart-device-products/TUR/getSmartDeviceProducts/v1"
+    "?collectionHandle=t10f-configurator"
+)
 DEFAULT_INTERVAL = 300  # saniye
 ERROR_ALERT_THRESHOLD = 3
 USER_AGENT = (
@@ -66,8 +71,8 @@ SECTION_END_RE = re.compile(
     r"^(konfigurator|konfigure et|versiyon sec|versiyonlar|sikca sorulan|iletisim|"
     r"t10x|t8x|t10f$)"
 )
-# Hedef araç
-TARGET_RE = re.compile(r"\bv2\b.*\brwd\b.*(uzun menzil|long range)")
+# Hedef araç (isimde "RWD" geçmeyebilir; 4More/AWD ayrıca dışlanıyor)
+TARGET_RE = re.compile(r"\bv2\b.*(uzun menzil|long range)")
 EXCLUDE_RE = re.compile(r"4more|awd|4x4")
 # Aynı bölümdeki başka bir model satırı (yeni kart başlangıcı)
 MODEL_LINE_RE = re.compile(r"\bt10f\b.*\bv[123]\b|\bv[123]\b.*\b(rwd|4more|awd)\b")
@@ -179,6 +184,67 @@ def find_stock_in_json(payloads: list[Any]) -> list[str]:
     for p in payloads:
         _walk(p, False, out)
     return dedupe(out)
+
+
+# ---------------------------------------------------------------------------
+# 3) API modu: getSmartDeviceProducts yanıtı
+# ---------------------------------------------------------------------------
+
+
+def _fmt_try(v: Any) -> str:
+    return f"{v:,.0f} ₺".replace(",", ".")
+
+
+def describe_product(p: dict) -> str:
+    parts = [str(p.get("name") or p.get("type_name") or "?")]
+    year = (p.get("model") or {}).get("year") if isinstance(p.get("model"), dict) else None
+    if year:
+        parts.append(str(year))
+    prices = p.get("price") or {}
+    price_bits = []
+    if isinstance(prices, dict):
+        for key in sorted(prices):
+            m = re.fullmatch(r"sct_(\d+)", key)
+            val = prices[key].get("with_all_taxes") if isinstance(prices[key], dict) else None
+            if m and isinstance(val, (int, float)):
+                price_bits.append(f"ÖTV %{m.group(1)}: {_fmt_try(val)}")
+    if price_bits:
+        parts.append(", ".join(price_bits))
+    return " | ".join(parts)
+
+
+def find_target_products(payload: Any) -> list[str]:
+    """getSmartDeviceProducts yanıtındaki ürünler arasında V2 (RWD) Uzun Menzil olanları döndürür."""
+    if not isinstance(payload, dict):
+        return []
+    products = payload.get("products")
+    if not isinstance(products, list):
+        return []
+    out = []
+    for p in products:
+        if not isinstance(p, dict):
+            continue
+        names = [str(p.get(k)) for k in ("name", "type_name") if p.get(k)]
+        if any(is_target(n) for n in names):
+            out.append(describe_product(p))
+    return dedupe(out)
+
+
+def fetch_products(api_url: str, timeout: int = 30) -> Any:
+    import requests
+
+    r = requests.get(
+        api_url,
+        headers={
+            "User-Agent": USER_AGENT,
+            "Accept": "application/json",
+            "Origin": "https://configurator.togg.com.tr",
+            "Referer": "https://configurator.togg.com.tr/",
+        },
+        timeout=timeout,
+    )
+    r.raise_for_status()
+    return r.json()
 
 
 # ---------------------------------------------------------------------------
@@ -352,11 +418,31 @@ def write_dump(dump_dir: Path, text: str, payloads: list, endpoints: list[str]) 
 # ---------------------------------------------------------------------------
 
 
-def check_once(url: str, state: dict, dump_dir: Path | None = None) -> list[str]:
-    text, payloads, endpoints = fetch_page(url, dump_dir=dump_dir)
-    if dump_dir:
-        write_dump(dump_dir, text, payloads, endpoints)
-    matches = dedupe(find_stock_in_text(text) + find_stock_in_json(payloads))
+def check_once(
+    url: str,
+    state: dict,
+    dump_dir: Path | None = None,
+    mode: str = "api",
+    api_url: str = DEFAULT_API_URL,
+) -> list[str]:
+    if mode == "api":
+        payload = fetch_products(api_url)
+        names = [
+            str(p.get("name")) for p in (payload.get("products") or []) if isinstance(p, dict)
+        ] if isinstance(payload, dict) else []
+        log.info("Konfigüratördeki ürünler: %s", names or "(boş)")
+        if dump_dir:
+            dump_dir.mkdir(parents=True, exist_ok=True)
+            (dump_dir / "products.json").write_text(
+                json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8"
+            )
+            log.info("Dump yazıldı: %s/products.json", dump_dir)
+        matches = find_target_products(payload)
+    else:
+        text, payloads, endpoints = fetch_page(url, dump_dir=dump_dir)
+        if dump_dir:
+            write_dump(dump_dir, text, payloads, endpoints)
+        matches = dedupe(find_stock_in_text(text) + find_stock_in_json(payloads))
     fresh = new_matches(state.get("last_matches", []), matches)
     if fresh:
         log.info("YENİ STOK: %s", fresh)
@@ -376,13 +462,15 @@ def run(
     state_path: Path,
     dump_dir: Path | None,
     max_runtime: int | None = None,
+    mode: str = "api",
+    api_url: str = DEFAULT_API_URL,
 ) -> int:
     """max_runtime verilirse (saniye) bir sonraki kontrol bu süreyi aşacaksa döngüden çıkar."""
     state = load_state(state_path)
     started = time.monotonic()
     while True:
         try:
-            check_once(url, state, dump_dir)
+            check_once(url, state, dump_dir, mode=mode, api_url=api_url)
             if state.get("consecutive_errors"):
                 log.info("Kontrol tekrar başarılı")
             state["consecutive_errors"] = 0
@@ -417,7 +505,11 @@ def run(
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Togg T10F V2 RWD Uzun Menzil stok takip botu")
-    parser.add_argument("--url", default=None, help=f"Kontrol edilecek sayfa (varsayılan: {DEFAULT_URL})")
+    parser.add_argument("--mode", choices=["api", "browser"], default=None,
+                        help="api: ürün JSON uç noktasını doğrudan sorgula (varsayılan, hafif); "
+                             "browser: Playwright ile sayfayı aç")
+    parser.add_argument("--api-url", default=None, help=f"API modunda sorgulanacak adres (varsayılan: {DEFAULT_API_URL})")
+    parser.add_argument("--url", default=None, help=f"Browser modunda açılacak sayfa (varsayılan: {DEFAULT_URL})")
     parser.add_argument("--interval", type=int, default=None, help="Kontrol aralığı, saniye (varsayılan 300)")
     parser.add_argument("--once", action="store_true", help="Tek kontrol yapıp çık (cron için)")
     parser.add_argument("--max-runtime", type=int, default=None, help="Bu kadar saniye sonra döngüden çık (GitHub Actions için)")
@@ -444,10 +536,15 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     url = args.url or os.environ.get("TOGG_URL") or DEFAULT_URL
+    api_url = args.api_url or os.environ.get("TOGG_API_URL") or DEFAULT_API_URL
+    mode = args.mode or os.environ.get("CHECK_MODE") or "api"
     interval = args.interval or int(os.environ.get("CHECK_INTERVAL", DEFAULT_INTERVAL))
     dump_dir = Path("dump") if args.dump else None
     try:
-        return run(url, interval, args.once or args.dump, Path(args.state), dump_dir, args.max_runtime)
+        return run(
+            url, interval, args.once or args.dump, Path(args.state), dump_dir,
+            args.max_runtime, mode=mode, api_url=api_url,
+        )
     except KeyboardInterrupt:
         log.info("Durduruldu")
         return 0

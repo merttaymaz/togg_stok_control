@@ -6,6 +6,7 @@
 #
 # Gerekli Secrets (Settings → Secrets and variables → Actions):
 #   TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID
+# İsteğe bağlı Variable: CHECK_MODE=browser (varsayılan api)
 
 name: Togg stok kontrol
 
@@ -15,7 +16,7 @@ on:
   workflow_dispatch:
     inputs:
       dump:
-        description: "Sadece sayfa dump'ı al (page.txt, page.png, JSON'lar) ve artifact olarak yükle"
+        description: "Sadece tek kontrol yap, ham veriyi loga ve artifact'e yaz"
         type: boolean
         default: false
 
@@ -30,6 +31,7 @@ jobs:
     env:
       TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
       TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+      CHECK_MODE: ${{ vars.CHECK_MODE || 'api' }}
     steps:
       - uses: actions/checkout@v4
 
@@ -39,9 +41,11 @@ jobs:
           cache: pip
 
       - name: Bağımlılıklar
-        run: |
-          pip install -r requirements.txt
-          python -m playwright install --with-deps chromium
+        run: pip install -r requirements.txt
+
+      - name: Playwright (sadece browser modunda)
+        if: ${{ env.CHECK_MODE == 'browser' }}
+        run: python -m playwright install --with-deps chromium
 
       - name: Önceki durumu geri yükle (state.json)
         uses: actions/cache/restore@v4
@@ -50,16 +54,17 @@ jobs:
           key: togg-state-${{ github.run_id }}
           restore-keys: togg-state-
 
-      - name: Sayfa dump'ı
+      - name: Dump
         if: ${{ inputs.dump }}
         run: python togg_stok_bot.py --dump -v
 
       - name: Dump özeti (log)
         if: ${{ inputs.dump }}
         run: |
-          echo "=== endpoints.txt ==="; cat dump/endpoints.txt || true
-          echo; echo "=== page.txt ==="; head -c 30000 dump/page.txt || true
-          echo; for f in dump/json_*.json; do echo; echo "=== $f ==="; head -c 6000 "$f"; done
+          for f in dump/endpoints.txt dump/page.txt dump/products.json dump/json_*.json; do
+            [ -f "$f" ] || continue
+            echo; echo "=== $f ==="; head -c 30000 "$f"
+          done
 
       - name: Dump'ı artifact olarak yükle
         if: ${{ inputs.dump }}

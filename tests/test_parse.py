@@ -1,4 +1,5 @@
 from togg_stok_bot import (
+    find_target_products,
     find_stock_in_json,
     find_stock_in_text,
     new_matches,
@@ -152,7 +153,7 @@ def test_run_stops_after_max_runtime(monkeypatch, tmp_path):
 
     calls = []
     clock = {"t": 0.0}
-    monkeypatch.setattr(bot, "check_once", lambda url, state, dump_dir=None: calls.append(1))
+    monkeypatch.setattr(bot, "check_once", lambda url, state, dump_dir=None, **kw: calls.append(1))
     monkeypatch.setattr(bot.time, "sleep", lambda s: clock.__setitem__("t", clock["t"] + s))
     monkeypatch.setattr(bot.time, "monotonic", lambda: clock["t"])
 
@@ -162,3 +163,65 @@ def test_run_stops_after_max_runtime(monkeypatch, tmp_path):
     assert rc == 0
     # t=0, 240, 480, 720, 960 kontrol; 960+240 > 1000 olduğundan 6. kontrol yapılmaz
     assert len(calls) == 5
+
+
+# ---------------------------------------------------------------------------
+# API modu: getSmartDeviceProducts yanıtında hedef ürün var mı?
+# ---------------------------------------------------------------------------
+
+PRODUCTS_4MORE_ONLY = {
+    "products": [
+        {
+            "id": "prod_1",
+            "name": "T10F V2 4More",
+            "type_name": "T10F V2 4More",
+            "model": {"name": "T10F", "year": 2026},
+            "price": {"sct_65": {"with_all_taxes": 3167000.001}},
+        },
+        {
+            "id": "prod_2",
+            "name": "T10F V2 4More Kehribar",
+            "type_name": "T10F V2 4More",
+            "model": {"name": "T10F", "year": 2026},
+            "price": {"sct_65": {"with_all_taxes": 3167000.001}},
+        },
+    ]
+}
+
+PRODUCTS_WITH_RWD = {
+    "products": PRODUCTS_4MORE_ONLY["products"]
+    + [
+        {
+            "id": "prod_3",
+            "name": "T10F V2 RWD Uzun Menzil",
+            "type_name": "T10F V2 RWD Uzun Menzil",
+            "model": {"name": "T10F", "year": 2026},
+            "price": {
+                "sct_25": {"with_all_taxes": 2393000.0},
+                "sct_55": {"with_all_taxes": 2907800.0},
+            },
+        }
+    ]
+}
+
+
+def test_products_with_only_4more_give_no_match():
+    assert find_target_products(PRODUCTS_4MORE_ONLY) == []
+
+
+def test_v2_rwd_product_is_matched_with_year_and_price():
+    matches = find_target_products(PRODUCTS_WITH_RWD)
+    assert len(matches) == 1
+    assert matches[0].startswith("T10F V2 RWD Uzun Menzil")
+    assert "2026" in matches[0]
+    assert "2.907.800" in matches[0]
+
+
+def test_v2_long_range_without_rwd_in_name_still_matches():
+    payload = {"products": [{"name": "T10F V2 Uzun Menzil", "price": {}}]}
+    assert len(find_target_products(payload)) == 1
+
+
+def test_products_payload_without_products_key_is_empty():
+    assert find_target_products({"error": "x"}) == []
+    assert find_target_products(None) == []
