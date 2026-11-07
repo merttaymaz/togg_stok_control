@@ -38,9 +38,10 @@ satırını ekle.
 4. **Actions** sekmesinde "Togg stok kontrol" workflow'unu seç → **Run workflow**,
    `dump` kutusunu işaretleyip çalıştır → biten işin altındaki `togg-dump` artifact'ini indir
    (eşleştirme kuralını kesinleştirmek için).
-5. Bir daha **Run workflow** (dump işaretsiz) de; artık her 30 dk'da bir iş başlar ve
-   ~55 dk boyunca 4 dk'da bir kontrol eder. Yeni iş eskisini iptal ettiği için aralık
-   kesintisiz ~4 dk'dır. Loglar Actions sekmesinde görünür.
+5. Bir daha **Run workflow** (dump işaretsiz) de; iş ~5,7 saat boyunca 4 dk'da bir
+   kontrol eder ve bitince bir sonrakini kendisi başlatır, yani zincir kendi kendine
+   sürer. Saatlik cron yalnızca zincir koparsa devreye giren yedektir (GitHub cron'u
+   saatlerce gecikebildiği için ana mekanizma değildir). Loglar Actions sekmesinde görünür.
 
 Durdurmak için: Actions → workflow → "⋯" → **Disable workflow**.
 
