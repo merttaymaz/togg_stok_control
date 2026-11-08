@@ -3,7 +3,8 @@
 # Her iş ~5,7 saat boyunca kendi içinde 4 dk'da bir kontrol eder ve bitince bir
 # sonraki işi kendisi başlatır (workflow_dispatch zinciri). GitHub cron'u
 # güvenilmez (saatlerce gecikebilir), o yüzden sadece yedek olarak saatlik
-# bir tetikleyici var. Yeni iş başlayınca eskisi iptal edilir (concurrency).
+# bir tetikleyici var. Zaten çalışan bir iş varsa yeni gelen iş sessizce çıkar;
+# böylece uzun işler kesilmez ve listede "cancelled" görünmez.
 #
 # Gerekli Secrets (Settings → Secrets and variables → Actions):
 #   TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID
@@ -25,10 +26,6 @@ on:
         type: boolean
         default: false
 
-concurrency:
-  group: togg-stok
-  cancel-in-progress: true
-
 permissions:
   contents: read
   actions: write   # bir sonraki işi başlatabilmek için
@@ -44,19 +41,38 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # Daha eski bir iş hâlâ kontrol ediyorsa bu iş gereksiz: kısa bir süre bekle
+      # (önceki iş son adımlarındaysa bitsin), hâlâ çalışıyorsa atla.
+      - name: Zaten çalışan iş var mı?
+        id: guard
+        if: ${{ !inputs.dump && !inputs.test_telegram }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          for i in $(seq 1 7); do
+            others=$(gh api "repos/${{ github.repository }}/actions/workflows/stok.yml/runs?status=in_progress&per_page=20"               --jq '[.workflow_runs[] | select(.id < ${{ github.run_id }})] | length')
+            if [ "$others" = "0" ]; then echo "skip=false" >> "$GITHUB_OUTPUT"; exit 0; fi
+            echo "Daha eski $others iş hâlâ çalışıyor, 15 sn bekleniyor ($i/7)"; sleep 15
+          done
+          echo "::notice::Başka bir iş zaten kontrol ediyor; bu çalışma atlandı."
+          echo "skip=true" >> "$GITHUB_OUTPUT"
+
       - uses: actions/setup-python@v5
+        if: steps.guard.outputs.skip != 'true'
         with:
           python-version: "3.12"
           cache: pip
 
       - name: Bağımlılıklar
+        if: steps.guard.outputs.skip != 'true'
         run: pip install -r requirements.txt
 
       - name: Playwright (sadece browser modunda)
-        if: ${{ env.CHECK_MODE == 'browser' }}
+        if: ${{ env.CHECK_MODE == 'browser' && steps.guard.outputs.skip != 'true' }}
         run: python -m playwright install --with-deps chromium
 
       - name: Önceki durumu geri yükle (state.json)
+        if: steps.guard.outputs.skip != 'true'
         uses: actions/cache/restore@v4
         with:
           path: state.json
@@ -87,20 +103,19 @@ jobs:
           path: dump/
 
       - name: Kontrol döngüsü (~5,7 saat, 4 dk aralık)
-        if: ${{ !inputs.dump && !inputs.test_telegram }}
+        if: ${{ !inputs.dump && !inputs.test_telegram && steps.guard.outputs.skip != 'true' }}
         run: python togg_stok_bot.py --interval 240 --max-runtime 20400
 
       - name: Durumu kaydet (state.json)
-        if: always()
+        if: ${{ !cancelled() && steps.guard.outputs.skip != 'true' }}
         uses: actions/cache/save@v4
         with:
           path: state.json
           key: togg-state-${{ github.run_id }}
 
-      # Zincir: bu iş bittiğinde (iptal edilmediyse) bir sonrakini başlat.
-      # İptal durumunda tetikleme yok, yoksa iki iş birbirini sonsuza kadar iptal eder.
+      # Zincir: bu iş bittiğinde bir sonrakini başlat (atlanan/iptal edilen işler başlatmaz).
       - name: Sonraki işi başlat
-        if: ${{ (success() || failure()) && !inputs.dump && !inputs.test_telegram }}
+        if: ${{ (success() || failure()) && !inputs.dump && !inputs.test_telegram && steps.guard.outputs.skip != 'true' }}
         env:
           GH_TOKEN: ${{ github.token }}
         run: gh api -X POST "repos/${{ github.repository }}/actions/workflows/stok.yml/dispatches" -f ref=main
