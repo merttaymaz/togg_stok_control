@@ -27,6 +27,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+import requests
+
 DEFAULT_URL = "https://configurator.togg.com.tr/t10f"
 # Konfigüratörün ürün listesini çektiği uç nokta (Playwright dump'ından tespit edildi)
 DEFAULT_API_URL = (
@@ -231,8 +233,6 @@ def find_target_products(payload: Any) -> list[str]:
 
 
 def fetch_products(api_url: str, timeout: int = 30) -> Any:
-    import requests
-
     r = requests.get(
         api_url,
         headers={
@@ -312,29 +312,34 @@ def save_state(path: Path, state: dict) -> None:
 # ---------------------------------------------------------------------------
 
 
-def send_telegram(text: str) -> None:
-    import requests
+def _strip_tags(s: str) -> str:
+    s = re.sub(r"<a href=\"([^\"]+)\">(.*?)</a>", r"\2: \1", s)
+    s = re.sub(r"<[^>]+>", "", s)
+    return s.replace("&lt;", "<").replace("&gt;", ">").replace("&amp;", "&")
 
+
+def send_telegram(text: str) -> None:
+    """Önce HTML olarak gönderir; Telegram reddederse düz metin olarak tekrar dener."""
     token = os.environ.get("TELEGRAM_BOT_TOKEN")
     chat_id = os.environ.get("TELEGRAM_CHAT_ID")
     if not token or not chat_id:
         raise RuntimeError("TELEGRAM_BOT_TOKEN ve TELEGRAM_CHAT_ID tanımlı olmalı (.env)")
-    r = requests.post(
-        f"https://api.telegram.org/bot{token}/sendMessage",
-        json={
-            "chat_id": chat_id,
-            "text": text,
-            "parse_mode": "HTML",
-            "disable_web_page_preview": True,
-        },
-        timeout=20,
-    )
-    if not r.ok:
+    url = f"https://api.telegram.org/bot{token}/sendMessage"
+    attempts = [
+        {"chat_id": chat_id, "text": text, "parse_mode": "HTML", "disable_web_page_preview": True},
+        {"chat_id": chat_id, "text": _strip_tags(text), "disable_web_page_preview": True},
+    ]
+    last_err = ""
+    for payload in attempts:
+        r = requests.post(url, json=payload, timeout=20)
+        if r.ok:
+            return
         try:
-            desc = r.json().get("description", "")
+            last_err = f"Telegram HTTP {r.status_code}: {r.json().get('description', '')}"
         except ValueError:
-            desc = r.text[:200]
-        raise RuntimeError(f"Telegram HTTP {r.status_code}: {desc}")
+            last_err = f"Telegram HTTP {r.status_code}: {r.text[:200]}"
+        log.warning("Telegram gönderimi başarısız (%s), tekrar deneniyor", last_err)
+    raise RuntimeError(last_err)
 
 
 def chats_from_updates(updates: Any) -> list[tuple[int, str]]:
@@ -353,8 +358,6 @@ def chats_from_updates(updates: Any) -> list[tuple[int, str]]:
 
 def telegram_diagnose() -> int:
     """Bota yazan sohbetleri listeler; TELEGRAM_CHAT_ID ile karşılaştırır."""
-    import requests
-
     token = os.environ.get("TELEGRAM_BOT_TOKEN")
     chat_id = os.environ.get("TELEGRAM_CHAT_ID", "")
     if not token:

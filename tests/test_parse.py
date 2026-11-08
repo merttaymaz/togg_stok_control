@@ -250,3 +250,55 @@ def test_chats_from_updates_handles_empty():
     from togg_stok_bot import chats_from_updates
 
     assert chats_from_updates({"ok": True, "result": []}) == []
+
+
+# ---------------------------------------------------------------------------
+# Telegram gönderimi: HTML reddedilirse düz metinle tekrar dene
+# ---------------------------------------------------------------------------
+
+
+class _Resp:
+    def __init__(self, status, body):
+        self.status_code = status
+        self.ok = status < 400
+        self._body = body
+        self.text = str(body)
+
+    def json(self):
+        return self._body
+
+
+def test_send_telegram_falls_back_to_plain_text_when_html_rejected(monkeypatch):
+    import togg_stok_bot as bot
+
+    calls = []
+
+    def fake_post(url, json, timeout):
+        calls.append(json)
+        if "parse_mode" in json:
+            return _Resp(400, {"ok": False, "description": "Bad Request: can't parse entities"})
+        return _Resp(200, {"ok": True})
+
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "t")
+    monkeypatch.setenv("TELEGRAM_CHAT_ID", "1")
+    monkeypatch.setattr(bot.requests, "post", fake_post)
+
+    bot.send_telegram("<b>x</b>")
+
+    assert len(calls) == 2
+    assert "parse_mode" not in calls[1]
+    assert "<b>" not in calls[1]["text"]  # etiketler düz metinde temizlenir
+
+
+def test_send_telegram_raises_with_description_when_both_fail(monkeypatch):
+    import pytest
+    import togg_stok_bot as bot
+
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "t")
+    monkeypatch.setenv("TELEGRAM_CHAT_ID", "1")
+    monkeypatch.setattr(
+        bot.requests, "post",
+        lambda url, json, timeout: _Resp(400, {"ok": False, "description": "chat not found"}),
+    )
+    with pytest.raises(RuntimeError, match="chat not found"):
+        bot.send_telegram("x")

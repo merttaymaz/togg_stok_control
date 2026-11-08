@@ -1,6 +1,6 @@
 # Togg T10F V2 RWD Uzun Menzil stok takibi — GitHub Actions
 #
-# Her iş ~5,7 saat boyunca kendi içinde 4 dk'da bir kontrol eder ve bitince bir
+# Her iş ~5,7 saat boyunca kendi içinde 2 dk'da bir kontrol eder ve bitince bir
 # sonraki işi kendisi başlatır (workflow_dispatch zinciri). GitHub cron'u
 # güvenilmez (saatlerce gecikebilir), o yüzden sadece yedek olarak saatlik
 # bir tetikleyici var. Zaten çalışan bir iş varsa yeni gelen iş sessizce çıkar;
@@ -102,9 +102,9 @@ jobs:
           name: togg-dump
           path: dump/
 
-      - name: Kontrol döngüsü (~5,7 saat, 4 dk aralık)
+      - name: Kontrol döngüsü (~5,7 saat, 2 dk aralık)
         if: ${{ !inputs.dump && !inputs.test_telegram && steps.guard.outputs.skip != 'true' }}
-        run: python togg_stok_bot.py --interval 240 --max-runtime 20400
+        run: python togg_stok_bot.py --interval 120 --max-runtime 20400
 
       - name: Durumu kaydet (state.json)
         if: ${{ !cancelled() && steps.guard.outputs.skip != 'true' }}
